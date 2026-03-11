@@ -22,6 +22,7 @@ def save_tasks(tasks):
     DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(tasks, f, indent=2)
+    return DATA_FILE.stat().st_mtime
 
 
 def parse_group(text):
@@ -78,6 +79,7 @@ def main(stdscr):
     curses.set_escdelay(25)
 
     tasks = load_tasks()
+    last_mtime = DATA_FILE.stat().st_mtime if DATA_FILE.exists() else 0
     cursor = 0
     input_mode = None  # None, "add", or "edit"
     new_text = ""
@@ -87,6 +89,15 @@ def main(stdscr):
     scroll_offset = 0
 
     while True:
+        # Hot-reload: check if file was modified externally
+        try:
+            current_mtime = DATA_FILE.stat().st_mtime if DATA_FILE.exists() else 0
+        except OSError:
+            current_mtime = 0
+        if current_mtime != last_mtime:
+            tasks = load_tasks()
+            last_mtime = current_mtime
+
         stdscr.erase()
         h, w = stdscr.getmaxyx()
 
@@ -206,6 +217,8 @@ def main(stdscr):
 
         stdscr.refresh()
 
+        # Poll with timeout so hot-reload can trigger
+        stdscr.timeout(500)
         try:
             key = stdscr.get_wch()
         except curses.error:
@@ -221,7 +234,7 @@ def main(stdscr):
                     if new_text.strip():
                         if input_mode == "add":
                             tasks.append({"text": new_text.strip(), "done": False})
-                            save_tasks(tasks)
+                            last_mtime = save_tasks(tasks)
                             message = f"Added: {new_text.strip()}"
                             message_color = 1  # green
                         elif input_mode == "edit":
@@ -230,7 +243,7 @@ def main(stdscr):
                             if cursor < len(edit_ti):
                                 _, task_ref = edit_lines[edit_ti[cursor]]
                                 task_ref["text"] = new_text.strip()
-                                save_tasks(tasks)
+                                last_mtime = save_tasks(tasks)
                                 message = f"Edited: {new_text.strip()}"
                                 message_color = 1  # green
                     input_mode = None
@@ -290,12 +303,12 @@ def main(stdscr):
             elif key == " " and current_task():
                 ct = current_task()
                 ct["done"] = not ct["done"]
-                save_tasks(tasks)
+                last_mtime = save_tasks(tasks)
                 message = ""
             elif key == "d" and current_task():
                 removed = current_task()
                 tasks = [t for t in tasks if t is not removed]
-                save_tasks(tasks)
+                last_mtime = save_tasks(tasks)
                 cursor = min(cursor, max(0, len([t for t in tasks]) - 1))
                 message = f"Deleted: {removed['text']}"
                 message_color = 5  # red
@@ -341,6 +354,24 @@ if __name__ == "__main__":
         matched[0]["done"] = True
         save_tasks(tasks)
         print(f"✓ Done: {matched[0]['text']}")
+        sys.exit(0)
+
+    # Mark undone by substring match: todo undone "keyword"
+    if len(sys.argv) >= 3 and sys.argv[1] == "undone":
+        query = " ".join(sys.argv[2:]).lower()
+        tasks = load_tasks()
+        matched = [t for t in tasks if t["done"] and query in t["text"].lower()]
+        if not matched:
+            print(f"✗ No completed task matching '{query}'")
+            sys.exit(1)
+        if len(matched) > 1:
+            print(f"? Multiple matches for '{query}':")
+            for t in matched:
+                print(f"  [x] {t['text']}")
+            sys.exit(1)
+        matched[0]["done"] = False
+        save_tasks(tasks)
+        print(f"✓ Undone: {matched[0]['text']}")
         sys.exit(0)
 
     # Delete by substring match: todo delete "keyword"
