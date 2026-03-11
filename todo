@@ -325,6 +325,43 @@ if __name__ == "__main__":
         print(f"✓ {text}")
         sys.exit(0)
 
+    # Mark done by substring match: todo done "keyword"
+    if len(sys.argv) >= 3 and sys.argv[1] == "done":
+        query = " ".join(sys.argv[2:]).lower()
+        tasks = load_tasks()
+        matched = [t for t in tasks if not t["done"] and query in t["text"].lower()]
+        if not matched:
+            print(f"✗ No pending task matching '{query}'")
+            sys.exit(1)
+        if len(matched) > 1:
+            print(f"? Multiple matches for '{query}':")
+            for t in matched:
+                print(f"  [ ] {t['text']}")
+            sys.exit(1)
+        matched[0]["done"] = True
+        save_tasks(tasks)
+        print(f"✓ Done: {matched[0]['text']}")
+        sys.exit(0)
+
+    # Delete by substring match: todo delete "keyword"
+    if len(sys.argv) >= 3 and sys.argv[1] in ("delete", "rm"):
+        query = " ".join(sys.argv[2:]).lower()
+        tasks = load_tasks()
+        matched = [t for t in tasks if query in t["text"].lower()]
+        if not matched:
+            print(f"✗ No task matching '{query}'")
+            sys.exit(1)
+        if len(matched) > 1:
+            print(f"? Multiple matches for '{query}':")
+            for t in matched:
+                check = "x" if t["done"] else " "
+                print(f"  [{check}] {t['text']}")
+            sys.exit(1)
+        tasks.remove(matched[0])
+        save_tasks(tasks)
+        print(f"✓ Deleted: {matched[0]['text']}")
+        sys.exit(0)
+
     # Quick list: todo list
     if len(sys.argv) == 2 and sys.argv[1] == "list":
         tasks = load_tasks()

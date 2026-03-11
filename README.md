@@ -1,70 +1,61 @@
 # todo
 
-A minimal terminal TODO list with persistent storage. Zero dependencies, pure Python + curses.
+A minimal terminal TODO list. Zero dependencies — pure Python + curses.
 
-## Features
-
-- Interactive TUI with keyboard navigation
-- Persistent storage (`~/.local/share/todo/tasks.json`)
-- Completed tasks get strikethrough and move to the bottom
-- Task grouping via `[Group]` prefix (e.g. `[App Mobile] Fix login`)
-- Inline editing with cursor movement
-- Quick CLI commands for scripting
+Data: `~/.local/share/todo/tasks.json`
 
 ## Install
 
 ```bash
-make install
-```
-
-Uninstall:
-
-```bash
+make install            # installs to ~/.local/bin/todo
+make install PREFIX=/usr/local/bin  # custom prefix
 make uninstall
 ```
 
-Custom prefix (default `~/.local/bin`):
+## CLI commands
 
 ```bash
-make install PREFIX=/usr/local/bin
+todo                        # interactive TUI
+todo list                   # print all tasks
+todo add "Fix the bug"      # add a task
+todo add "[API] Fix auth"   # add a task in the API group
+todo done "fix auth"        # mark done (substring match, case-insensitive)
+todo delete "fix auth"      # delete a task (substring match)
+todo rm "fix auth"          # alias for delete
 ```
 
-## Usage
+All substring commands require a unique match. If multiple tasks match, they are listed and no action is taken.
 
-### Interactive mode
+## Groups
+
+Prefix task text with `[GroupName]` to organize:
 
 ```bash
-todo
+todo add "[App Mobile] Push notifications"
+todo add "[API] Refactor auth"
+todo add "Ungrouped task"
 ```
+
+Display groups tasks under headers. Ungrouped tasks appear first.
+
+## TUI keybindings
 
 | Key | Action |
 |-----|--------|
 | `↑↓` / `j/k` | Navigate |
-| `space` | Toggle done |
+| `space` | Toggle done/undone |
 | `a` | Add task |
 | `e` | Edit task |
 | `d` | Delete task |
-| `←→` | Move cursor in input |
-| `Home/End` | Jump to start/end of input |
+| `←→` / `Home/End` | Move cursor in input |
 | `Esc` | Cancel input |
 | `q` | Quit |
 
-### Groups
+## Data format
 
-Prefix a task with `[GroupName]` to organize tasks visually:
-
-```
-[App Mobile] Fix login screen
-[App Mobile] Add push notifications
-[API] Refactor auth module
-Do the laundry
-```
-
-Tasks are displayed under their group header. Ungrouped tasks appear first.
-
-### CLI mode
-
-```bash
-todo add "[API] Fix the bug"
-todo list
+```json
+[
+  {"text": "[API] Fix auth", "done": false},
+  {"text": "Buy milk", "done": true}
+]
 ```
