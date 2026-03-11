@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Terminal TODO list with persistent storage and keyboard navigation."""
+
+import curses
+import json
+import os
+import sys
+from pathlib import Path
+
+DATA_FILE = Path.home() / ".local" / "share" / "todo" / "tasks.json"
+
+
+def load_tasks():
+    if DATA_FILE.exists():
+        with open(DATA_FILE) as f:
+            return json.load(f)
+    return []
+
+
+def save_tasks(tasks):
+    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(DATA_FILE, "w") as f:
+        json.dump(tasks, f, indent=2)
+
+
+def sorted_tasks(tasks):
+    """Pending first, done last — preserve relative order within each group."""
+    pending = [t for t in tasks if not t["done"]]
+    done = [t for t in tasks if t["done"]]
+    return pending + done
+
+
+def main(stdscr):
+    curses.curs_set(0)
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_GREEN, -1)   # done
+    curses.init_pair(2, curses.COLOR_WHITE, -1)    # pending
+    curses.init_pair(3, curses.COLOR_BLACK, curses.COLOR_WHITE)  # selected
+    curses.init_pair(4, curses.COLOR_YELLOW, -1)   # header
+    curses.init_pair(5, curses.COLOR_RED, -1)       # delete
+    curses.init_pair(6, curses.COLOR_CYAN, -1)      # help
+
+    tasks = load_tasks()
+    cursor = 0
+    adding = False
+    new_text = ""
+    message = ""
+    scroll_offset = 0
+
+    while True:
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+
+        # Header
+        header = " TODO "
+        try:
+            stdscr.addnstr(0, 0, "─" * w, w - 1, curses.color_pair(4))
+            stdscr.addnstr(0, max(0, (w - len(header)) // 2), header, w - 1, curses.color_pair(4) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        # Help bar
+        help_text = "↑↓ space a d q"
+        try:
+            stdscr.addnstr(1, max(0, (w - len(help_text)) // 2), help_text, w - 1, curses.color_pair(6))
+        except curses.error:
+            pass
+
+        display = sorted_tasks(tasks)
+        list_start = 3
+        max_visible = h - list_start - 2  # room for input/message at bottom
+
+        if max_visible < 1:
+            max_visible = 1
+
+        # Adjust scroll
+        if cursor < scroll_offset:
+            scroll_offset = cursor
+        if cursor >= scroll_offset + max_visible:
+            scroll_offset = cursor - max_visible + 1
+
+        if not display:
+            try:
+                stdscr.addnstr(list_start + 1, 2, "Press 'a' to add a task.", w - 3, curses.color_pair(6))
+            except curses.error:
+                pass
+        else:
+            for i in range(scroll_offset, min(len(display), scroll_offset + max_visible)):
+                row = list_start + (i - scroll_offset)
+                task = display[i]
+                is_selected = (i == cursor)
+
+                # Checkbox
+                check = "[x]" if task["done"] else "[ ]"
+                # Text with strikethrough for done
+                text = task["text"]
+                if task["done"]:
+                    # Unicode strikethrough: combine each char with U+0336
+                    text = "".join(c + "\u0336" for c in text)
+
+                line = f"  {check} {text}"
+                # Truncate if too long
+                if len(line) > w - 1:
+                    line = line[:w - 4] + "..."
+
+                if is_selected:
+                    attr = curses.color_pair(3) | curses.A_BOLD
+                elif task["done"]:
+                    attr = curses.color_pair(1)
+                else:
+                    attr = curses.color_pair(2)
+
+                try:
+                    stdscr.addstr(row, 0, line.ljust(w - 1), attr)
+                except curses.error:
+                    pass
+
+            # Scroll indicator
+            if len(display) > max_visible:
+                indicator = f" [{scroll_offset + 1}-{min(scroll_offset + max_visible, len(display))}/{len(display)}]"
+                try:
+                    stdscr.addstr(list_start + max_visible, w - len(indicator) - 1, indicator,
+                                  curses.color_pair(6))
+                except curses.error:
+                    pass
+
+        # Bottom area: input or message
+        bottom = h - 1
+        if adding:
+            curses.curs_set(1)
+            prompt = " > "
+            try:
+                stdscr.addstr(bottom, 0, prompt, curses.color_pair(4) | curses.A_BOLD)
+                stdscr.addstr(bottom, len(prompt), new_text[:w - len(prompt) - 1])
+                stdscr.move(bottom, len(prompt) + len(new_text))
+            except curses.error:
+                pass
+        else:
+            curses.curs_set(0)
+            if message:
+                try:
+                    stdscr.addstr(bottom, 1, message[:w - 2], curses.color_pair(5))
+                except curses.error:
+                    pass
+
+        stdscr.refresh()
+
+        key = stdscr.get_wch()
+
+        if adding:
+            if isinstance(key, str):
+                if key == "\n":
+                    # Submit
+                    if new_text.strip():
+                        tasks.append({"text": new_text.strip(), "done": False})
+                        save_tasks(tasks)
+                        message = f"Added: {new_text.strip()}"
+                    adding = False
+                    new_text = ""
+                elif key == "\x1b":
+                    # Escape — cancel
+                    adding = False
+                    new_text = ""
+                    message = ""
+                elif key in ("\x7f", "\b"):
+                    # Backspace
+                    new_text = new_text[:-1]
+                else:
+                    new_text += key
+            elif isinstance(key, int):
+                if key == curses.KEY_BACKSPACE:
+                    new_text = new_text[:-1]
+            continue
+
+        display = sorted_tasks(tasks)
+
+        if isinstance(key, str):
+            if key in ("q", "Q"):
+                break
+            elif key == "a":
+                adding = True
+                new_text = ""
+                message = ""
+            elif key == " " and display:
+                # Toggle — find the actual task in the original list
+                toggled = display[cursor]
+                for t in tasks:
+                    if t is toggled:
+                        t["done"] = not t["done"]
+                        break
+                save_tasks(tasks)
+                # Adjust cursor to follow the task or stay in bounds
+                new_display = sorted_tasks(tasks)
+                cursor = min(cursor, max(0, len(new_display) - 1))
+                message = ""
+            elif key == "d" and display:
+                removed = display[cursor]
+                tasks = [t for t in tasks if t is not removed]
+                save_tasks(tasks)
+                cursor = min(cursor, max(0, len(tasks) - 1))
+                message = f"Deleted: {removed['text']}"
+            elif key == "j":
+                if display and cursor < len(display) - 1:
+                    cursor += 1
+            elif key == "k":
+                if cursor > 0:
+                    cursor -= 1
+
+        elif isinstance(key, int):
+            if key == curses.KEY_DOWN:
+                if display and cursor < len(display) - 1:
+                    cursor += 1
+            elif key == curses.KEY_UP:
+                if cursor > 0:
+                    cursor -= 1
+
+
+if __name__ == "__main__":
+    # Quick add from CLI: todo add "my task"
+    if len(sys.argv) >= 3 and sys.argv[1] == "add":
+        text = " ".join(sys.argv[2:])
+        tasks = load_tasks()
+        tasks.append({"text": text, "done": False})
+        save_tasks(tasks)
+        print(f"✓ {text}")
+        sys.exit(0)
+
+    # Quick list: todo list
+    if len(sys.argv) == 2 and sys.argv[1] == "list":
+        tasks = load_tasks()
+        display = sorted_tasks(tasks)
+        if not display:
+            print("No tasks.")
+        for t in display:
+            check = "x" if t["done"] else " "
+            text = t["text"]
+            if t["done"]:
+                text = "".join(c + "\u0336" for c in text)
+            print(f"  [{check}] {text}")
+        sys.exit(0)
+
+    curses.wrapper(main)
