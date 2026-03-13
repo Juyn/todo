@@ -33,6 +33,44 @@ def parse_group(text):
     return None, text
 
 
+def get_known_groups(tasks):
+    """Return list of unique group names from existing tasks, preserving order."""
+    seen = []
+    for t in tasks:
+        group, _ = parse_group(t["text"])
+        if group and group not in seen:
+            seen.append(group)
+    return seen
+
+
+def get_group_completion(text, cursor_pos, known_groups):
+    """If cursor is inside an incomplete [prefix, return (suggestion, completion_text).
+    Returns (None, None) if no match."""
+    # Find the last unclosed '[' before cursor
+    before_cursor = text[:cursor_pos]
+    bracket_pos = before_cursor.rfind('[')
+    if bracket_pos == -1:
+        return None, None
+    # Check there's no closing ']' between '[' and cursor
+    if ']' in before_cursor[bracket_pos:]:
+        return None, None
+    partial = before_cursor[bracket_pos + 1:]
+    if not partial:
+        return None, None
+    # Find first matching group (case-insensitive)
+    partial_lower = partial.lower()
+    for group in known_groups:
+        if group.lower().startswith(partial_lower) and group.lower() != partial_lower:
+            completion = group[len(partial):] + "] "
+            return group, completion
+    # Also match exact (for Tab to close bracket)
+    for group in known_groups:
+        if group.lower() == partial_lower:
+            completion = "] "
+            return group, completion
+    return None, None
+
+
 def grouped_display(tasks):
     """Build display lines: group headers + tasks, pending first, done last per group.
     Returns list of (type, data) where type is 'header' or 'task'."""
@@ -110,7 +148,7 @@ def main(stdscr):
             pass
 
         # Help bar
-        help_text = "↑↓ space a e d q"
+        help_text = "↑↓ space a e d R q"
         try:
             stdscr.addnstr(1, max(0, (w - len(help_text)) // 2), help_text, w - 1, curses.color_pair(6))
         except curses.error:
@@ -201,9 +239,18 @@ def main(stdscr):
         if input_mode:
             curses.curs_set(1)
             prompt = " + " if input_mode == "add" else " ~ "
+            known_groups = get_known_groups(tasks)
+            _, completion = get_group_completion(new_text, text_cursor, known_groups)
             try:
                 stdscr.addstr(bottom, 0, prompt, curses.color_pair(4) | curses.A_BOLD)
-                stdscr.addstr(bottom, len(prompt), new_text[:w - len(prompt) - 1])
+                display_text = new_text[:w - len(prompt) - 1]
+                stdscr.addstr(bottom, len(prompt), display_text)
+                # Show ghost completion text
+                if completion:
+                    ghost_col = len(prompt) + text_cursor
+                    ghost_text = completion[:w - ghost_col - 1]
+                    if ghost_text:
+                        stdscr.addstr(bottom, ghost_col, ghost_text, curses.color_pair(6) | curses.A_DIM)
                 stdscr.move(bottom, len(prompt) + text_cursor)
             except curses.error:
                 pass
@@ -258,6 +305,13 @@ def main(stdscr):
                     if text_cursor > 0:
                         new_text = new_text[:text_cursor - 1] + new_text[text_cursor:]
                         text_cursor -= 1
+                elif key == "\t":
+                    # Tab: accept group autocomplete
+                    known_groups = get_known_groups(tasks)
+                    _, completion = get_group_completion(new_text, text_cursor, known_groups)
+                    if completion:
+                        new_text = new_text[:text_cursor] + completion + new_text[text_cursor:]
+                        text_cursor += len(completion)
                 elif key.isprintable():
                     new_text = new_text[:text_cursor] + key + new_text[text_cursor:]
                     text_cursor += 1
@@ -305,6 +359,10 @@ def main(stdscr):
                 ct["done"] = not ct["done"]
                 last_mtime = save_tasks(tasks)
                 message = ""
+            elif key == "R":
+                # Hot-reload: re-exec the script itself
+                curses.endwin()
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             elif key == "d" and current_task():
                 removed = current_task()
                 tasks = [t for t in tasks if t is not removed]
